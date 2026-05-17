@@ -90,8 +90,6 @@ export async function runStage01(opts: RunStage01Options): Promise<void> {
     let totalBookmarks = 0;
     let totalThoughts = 0;
 
-    const readStatsPromise = getReadDetail(wereadKey).catch(() => null);
-
     const summaries = await pMap(selected, async (nb: NotebookBook) => {
       const [bookmarks, thoughts] = await Promise.all([
         getBookmarks(wereadKey, nb.bookId).catch(() => null),
@@ -128,30 +126,21 @@ export async function runStage01(opts: RunStage01Options): Promise<void> {
 
     const validSummaries = summaries.filter((s): s is NonNullable<typeof s> => s !== null);
 
-    emit({
-      type: "meta",
+    const meta = {
       totalBooks: allNotebooks.length,
       privateExcluded,
       totalBookmarks,
       totalThoughts,
       selectedCount: validSummaries.length,
-    });
+    };
+    emit({ type: "meta", ...meta });
 
-    const readStats = await readStatsPromise;
-
+    // Emit summaries immediately — do NOT await readStatsPromise here.
+    // readStats is optional in the Stage 2 prompt; waiting for it pushes the
+    // summaries event past EdgeOne's wall-clock limit.
     emit({
       type: "summaries",
-      data: {
-        summaries: validSummaries,
-        meta: {
-          totalBooks: allNotebooks.length,
-          privateExcluded,
-          totalBookmarks,
-          totalThoughts,
-          selectedCount: validSummaries.length,
-        },
-        readStats,
-      },
+      data: { summaries: validSummaries, meta, readStats: null },
     });
   } catch (e: any) {
     emit({ type: "error", message: e?.message || String(e) });
