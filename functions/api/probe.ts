@@ -5,7 +5,8 @@
 //   If 2nd event arrives after 20s → TTFB timeout (fixable by emitting early)
 //   If connection drops ~15-16s → hard wall-clock limit (must switch strategy)
 
-export async function onRequestGet(): Promise<Response> {
+export async function onRequestGet(context: { env: Record<string, string | undefined> }): Promise<Response> {
+  const env = context.env || {};
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -13,7 +14,16 @@ export async function onRequestGet(): Promise<Response> {
         controller.enqueue(encoder.encode(`data: ${msg}\n\n`));
       };
 
-      send(JSON.stringify({ t: 0, msg: "probe_start", ts: Date.now() }));
+      send(JSON.stringify({
+        t: 0,
+        msg: "probe_start",
+        ts: Date.now(),
+        env: {
+          flash: env.DEEPSEEK_FLASH_MODEL || "(unset)",
+          pro: env.DEEPSEEK_PRO_MODEL || "(unset)",
+          hasKey: !!env.DEEPSEEK_API_KEY,
+        },
+      }));
 
       await new Promise((r) => setTimeout(r, 20_000));
 
