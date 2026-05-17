@@ -5,8 +5,10 @@ const GATEWAY = "https://i.weread.qq.com/api/agent/gateway";
 const SKILL_VERSION = "1.0.3";
 
 export class WeReadError extends Error {
-  constructor(message: string, public errcode?: number) {
+  errcode?: number;
+  constructor(message: string, errcode?: number) {
     super(message);
+    this.errcode = errcode;
   }
 }
 
