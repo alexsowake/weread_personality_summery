@@ -6,7 +6,7 @@ import {
   getBookmarks, getMyReviews, getReadDetail, pMap,
   type NotebookBook,
 } from "./weread.ts";
-import { compressBook, type CompressedBook } from "./compress.ts";
+import { compressBook } from "./compress.ts";
 import { complete, completeStream, type DeepSeekConfig } from "./deepseek.ts";
 import { STAGE1_SYSTEM, stage1User, STAGE2_SYSTEM, stage2User } from "./prompts.ts";
 
@@ -64,47 +64,27 @@ export async function run(opts: RunOptions): Promise<void> {
       return;
     }
 
-    // ---- Stage 0c: fetch bookmarks + thoughts in parallel ----
-    emit({ type: "status", message: "正在抓取每本书的划线和想法..." });
-    let fetchedCount = 0;
-    const fetched = await pMap(selected, async (nb: NotebookBook) => {
+    // ---- Stage 0c + 0d + Stage 1: pipelined per-book (fetch → compress → summarize) ----
+    // Each book is processed end-to-end before waiting for others, reducing total latency.
+    emit({ type: "status", message: `正在抓取并分析 ${selected.length} 本书...` });
+    let doneCount = 0;
+    let totalBookmarks = 0;
+    let totalThoughts = 0;
+
+    // Kick off readStats in parallel with the per-book work.
+    const readStatsPromise = getReadDetail(wereadKey).catch(() => null);
+
+    const summaries = await pMap(selected, async (nb: NotebookBook) => {
+      // Stage 0c
       const [bookmarks, thoughts] = await Promise.all([
         getBookmarks(wereadKey, nb.bookId).catch(() => null),
         getMyReviews(wereadKey, nb.bookId).catch(() => [] as any[]),
       ]);
-      fetchedCount++;
-      emit({
-        type: "progress",
-        current: fetchedCount,
-        total: selected.length,
-        bookTitle: nb.book.title,
-      });
-      return { nb, bookmarks, thoughts };
-    }, 5);
-
-    const valid = fetched.filter((x): x is NonNullable<typeof x> => x !== null);
-
-    // ---- Stage 0d: compress each book ----
-    const compressed: CompressedBook[] = valid.map(v =>
-      compressBook(v.nb.book.title, v.nb.book.author, v.bookmarks, v.thoughts)
-    );
-
-    const totalBookmarks = compressed.reduce((s, c) => s + c.totalBookmarks, 0);
-    const totalThoughts = compressed.reduce((s, c) => s + c.totalThoughts, 0);
-
-    emit({
-      type: "meta",
-      totalBooks: allNotebooks.length,
-      privateExcluded,
-      totalBookmarks,
-      totalThoughts,
-      selectedCount: compressed.length,
-    });
-
-    // ---- Stage 1: per-book summary in parallel (Flash) ----
-    emit({ type: "status", message: `正在用 AI 精读 ${compressed.length} 本书...` });
-    let summarizedCount = 0;
-    const summaries = await pMap(compressed, async (book) => {
+      // Stage 0d
+      const book = compressBook(nb.book.title, nb.book.author, bookmarks, thoughts);
+      totalBookmarks += book.totalBookmarks;
+      totalThoughts += book.totalThoughts;
+      // Stage 1
       try {
         const raw = await complete(
           deepseek,
@@ -121,25 +101,28 @@ export async function run(opts: RunOptions): Promise<void> {
           thinking_style: "(解析失败)",
           notable_quotes: [],
         };
-        summarizedCount++;
-        emit({
-          type: "progress",
-          current: summarizedCount,
-          total: compressed.length,
-          bookTitle: book.title,
-        });
-        return { title: book.title, author: book.author, summary: parsed };
+        doneCount++;
+        emit({ type: "progress", current: doneCount, total: selected.length, bookTitle: nb.book.title });
+        return { title: nb.book.title, author: nb.book.author, summary: parsed };
       } catch (e: any) {
-        summarizedCount++;
-        emit({ type: "progress", current: summarizedCount, total: compressed.length, bookTitle: book.title });
-        return { title: book.title, author: book.author, summary: { error: e.message } };
+        doneCount++;
+        emit({ type: "progress", current: doneCount, total: selected.length, bookTitle: nb.book.title });
+        return { title: nb.book.title, author: nb.book.author, summary: { error: (e as any).message } };
       }
-    }, 6);
+    }, 8);
 
     const validSummaries = summaries.filter((s): s is NonNullable<typeof s> => s !== null);
 
-    // ---- Optional: fetch reading stats ----
-    const readStats = await getReadDetail(wereadKey).catch(() => null);
+    emit({
+      type: "meta",
+      totalBooks: allNotebooks.length,
+      privateExcluded,
+      totalBookmarks,
+      totalThoughts,
+      selectedCount: validSummaries.length,
+    });
+
+    const readStats = await readStatsPromise;
 
     // ---- Stage 2: portrait synthesis (Pro, streamed) ----
     emit({ type: "status", message: "正在生成阅读人格画像..." });
