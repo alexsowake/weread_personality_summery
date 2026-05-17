@@ -1,0 +1,14 @@
+{
+  "name": "weread-personality-summery",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "edgeone pages dev",
+    "deploy": "edgeone pages deploy"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}
