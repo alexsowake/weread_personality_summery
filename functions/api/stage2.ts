@@ -38,9 +38,13 @@ export async function onRequestPost(context: { request: Request; env: Env }): Pr
       const send = (e: ProgressEvent) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
       };
+      // Break CDN buffering: send 2KB padding upfront so the first chunk
+      // exceeds typical buffer thresholds and forces an immediate flush.
+      controller.enqueue(encoder.encode(":" + " ".repeat(2048) + "\n\n"));
+      send({ type: "status", message: "正在生成阅读人格画像..." });
       const heartbeat = setInterval(() => {
-        try { controller.enqueue(encoder.encode(": ping\n\n")); } catch {}
-      }, 15000);
+        try { controller.enqueue(encoder.encode(`data: {"type":"ping"}\n\n`)); } catch {}
+      }, 5000);
 
       try {
         await runStage2({
