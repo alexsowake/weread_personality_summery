@@ -40,15 +40,22 @@ export async function onRequestPost(context: { request: Request; env: Env }): Pr
   }
 
   const encoder = new TextEncoder();
+  // See stage2.ts for why we pad with random noise (defeats EdgeOne brotli buffer).
+  const noise = (n: number): string => {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let s = "";
+    for (let i = 0; i < n; i++) s += chars[Math.floor(Math.random() * 62)];
+    return s;
+  };
   const stream = new ReadableStream({
     async start(controller) {
       const send = (e: ProgressEvent) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
+        controller.enqueue(encoder.encode(`:${noise(16384)}\ndata: ${JSON.stringify(e)}\n\n`));
       };
       send({ type: "status", message: "正在启动..." });
       const heartbeat = setInterval(() => {
-        try { controller.enqueue(encoder.encode(`data: {"type":"ping"}\n\n`)); } catch {}
-      }, 5000);
+        try { controller.enqueue(encoder.encode(`:${noise(16384)}\ndata: {"type":"ping"}\n\n`)); } catch {}
+      }, 3000);
 
       try {
         await runStage01({

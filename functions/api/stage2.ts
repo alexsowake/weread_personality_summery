@@ -33,15 +33,29 @@ export async function onRequestPost(context: { request: Request; env: Env }): Pr
   }
 
   const encoder = new TextEncoder();
+  // EdgeOne CDN force-applies Brotli regardless of Content-Type or
+  // Content-Encoding: identity. Brotli buffers compressible (low-entropy)
+  // text indefinitely. Workaround: pad every flush with ~16KB of random
+  // base64 chars (high entropy) inside an SSE comment line. Brotli can't
+  // compress randomness, so it must emit a block, which reaches the browser.
+  const noise = (n: number): string => {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let s = "";
+    for (let i = 0; i < n; i++) s += chars[Math.floor(Math.random() * 62)];
+    return s;
+  };
   const stream = new ReadableStream({
     async start(controller) {
       const send = (e: ProgressEvent) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
+        // portrait_deltas arrive in rapid bursts and self-flush brotli blocks;
+        // larger/infrequent events get noise padding to force an immediate flush.
+        const pad = e.type === "portrait_delta" ? "" : `:${noise(16384)}\n`;
+        controller.enqueue(encoder.encode(`${pad}data: ${JSON.stringify(e)}\n\n`));
       };
       send({ type: "status", message: "正在生成阅读人格画像..." });
       const heartbeat = setInterval(() => {
-        try { controller.enqueue(encoder.encode(`data: {"type":"ping"}\n\n`)); } catch {}
-      }, 5000);
+        try { controller.enqueue(encoder.encode(`:${noise(16384)}\ndata: {"type":"ping"}\n\n`)); } catch {}
+      }, 3000);
 
       try {
         await runStage2({
