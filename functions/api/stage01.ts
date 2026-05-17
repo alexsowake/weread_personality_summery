@@ -45,13 +45,13 @@ export async function onRequestPost(context: { request: Request; env: Env }): Pr
       const send = (e: ProgressEvent) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
       };
-      // Break CDN buffering: send 2KB padding upfront so the first chunk
-      // exceeds typical buffer thresholds and forces an immediate flush.
-      controller.enqueue(encoder.encode(":" + " ".repeat(2048) + "\n\n"));
+      // Break CDN HTTP/2 buffering: 64KB padding exceeds default HTTP/2
+      // initial window (65535 bytes) and forces edge to flush bytes to client.
+      controller.enqueue(encoder.encode(":" + " ".repeat(65536) + "\n\n"));
       send({ type: "status", message: "正在启动..." });
       const heartbeat = setInterval(() => {
-        try { controller.enqueue(encoder.encode(`data: {"type":"ping"}\n\n`)); } catch {}
-      }, 5000);
+        try { controller.enqueue(encoder.encode(`:${" ".repeat(4096)}\ndata: {"type":"ping"}\n\n`)); } catch {}
+      }, 3000);
 
       try {
         await runStage01({
