@@ -62,14 +62,16 @@ export async function onRequestPost(context: { request: Request; env: Env }): Pr
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
+      // EdgeOne CDN auto-applies Brotli compression to text/event-stream
+      // (and ignores Content-Encoding: identity on responses), which buffers
+      // the SSE stream until enough bytes accumulate for a brotli block —
+      // making the browser see 0 body bytes for 60s, then time out.
+      // Use application/octet-stream to bypass the text/* compression rule.
+      // Frontend parses the SSE format manually; it doesn't need text/event-stream.
+      "Content-Type": "application/octet-stream",
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no",
-      // Critical: EdgeOne applies Brotli to text/* by default, which buffers
-      // the entire SSE stream until enough data accumulates for a compressed
-      // block. Declaring identity disables that.
-      "Content-Encoding": "identity",
     },
   });
 }

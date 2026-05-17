@@ -70,14 +70,11 @@ export async function onRequestPost(context: { request: Request; env: Env }): Pr
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
+      // See stage2.ts for why we use octet-stream instead of event-stream.
+      "Content-Type": "application/octet-stream",
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no",
-      // Critical: EdgeOne applies Brotli to text/* by default, which buffers
-      // the entire SSE stream until enough data accumulates for a compressed
-      // block. Declaring identity disables that.
-      "Content-Encoding": "identity",
     },
   });
 }
