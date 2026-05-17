@@ -817,12 +817,11 @@
 
     <!-- Step 2: tier -->
     <section id="step-tier" class="hidden">
-      <div class="step-title">选择分析范围</div>
+      <div class="step-title">准备就绪</div>
       <div id="tier-info" class="tier-info"></div>
-      <div id="tier-buttons" class="tier-grid"></div>
       <div class="tier-row-btns">
         <button id="btn-back" class="btn-back">← 重新输入 Key</button>
-        <button id="btn-start" class="btn-start" disabled>开始分析 →</button>
+        <button id="btn-start" class="btn-start">开始分析 →</button>
       </div>
     </section>
 
@@ -836,6 +835,7 @@
         <div id="progress-status" class="progress-status">准备中...</div>
         <div class="progress-track"><div id="progress-bar" class="progress-fill"></div></div>
         <div id="progress-detail" class="progress-detail"></div>
+        <button id="btn-retry-stage2" class="btn-start hidden" style="margin-top:16px;">重试生成画像</button>
       </div>
     </section>
 
@@ -868,8 +868,8 @@ const showError = (msg) => {
 };
 
 let wereadKey = null;
-let chosenTier = null;
 let totalBookCount = 0;
+let stage01Result = null;
 
 $("btn-open-weread").addEventListener("click", () => {
   window.open("https://weread.qq.com/r/weread-skills", "_blank", "noopener");
@@ -919,37 +919,11 @@ async function submitKey(key) {
 function renderTierStep() {
   hide("step-intro");
   show("step-tier");
-
-  $("tier-info").textContent = `检测到你有 ${totalBookCount} 本带笔记的书，选择本次要分析的范围：`;
-
-  const tiers = totalBookCount < 20
-    ? [{ value: "lt20", label: "全部", sub: `${totalBookCount} 本` }]
-    : [
-        { value: "lt20", label: "<20 本", sub: "快速体验" },
-        { value: "20",   label: "20 本",  sub: "约 30s" },
-        { value: "30",   label: "30 本",  sub: "约 50s" },
-        { value: "40",   label: "40 本",  sub: "约 75s" },
-        { value: "50",   label: "50 本",  sub: "约 2 分钟" },
-      ];
-
-  const container = $("tier-buttons");
-  container.innerHTML = "";
-  tiers.forEach(t => {
-    const tierNum = t.value === "lt20" ? 19 : parseInt(t.value, 10);
-    const disabled = totalBookCount >= 20 && tierNum > totalBookCount;
-    const btn = document.createElement("button");
-    btn.className = "tier-btn" + (disabled ? "" : "");
-    btn.disabled = disabled;
-    btn.innerHTML = `<span class="tier-btn-label">${t.label}</span><span class="tier-btn-sub">${t.sub}</span>`;
-    btn.addEventListener("click", () => {
-      if (disabled) return;
-      chosenTier = t.value;
-      Array.from(container.children).forEach(c => c.classList.remove("selected"));
-      btn.classList.add("selected");
-      $("btn-start").disabled = false;
-    });
-    container.appendChild(btn);
-  });
+  const planned = Math.min(20, totalBookCount);
+  $("tier-info").textContent =
+    totalBookCount < 20
+      ? `检测到你有 ${totalBookCount} 本带笔记的书，将全部纳入分析。`
+      : `检测到你有 ${totalBookCount} 本带笔记的书，本次将分析其中笔记最丰富的 ${planned} 本。`;
 }
 
 $("btn-back").addEventListener("click", () => {
@@ -957,15 +931,15 @@ $("btn-back").addEventListener("click", () => {
   show("step-intro");
   $("btn-paste").disabled = false;
   $("btn-paste").textContent = "我已复制 Key，自动粘贴";
-  chosenTier = null;
-  $("btn-start").disabled = true;
 });
 
 $("btn-start").addEventListener("click", async () => {
   hide("step-tier");
   show("step-progress");
+  hide("btn-retry-stage2");
   $("portrait").innerHTML = "";
   portraitBuffer = "";
+  stage01Result = null;
   try {
     await runAnalysis();
   } catch (e) {
@@ -975,20 +949,91 @@ $("btn-start").addEventListener("click", async () => {
   }
 });
 
+$("btn-retry-stage2").addEventListener("click", async () => {
+  if (!stage01Result) {
+    showError("没有可重试的数据，请重新分析");
+    return;
+  }
+  hide("btn-retry-stage2");
+  portraitBuffer = "";
+  $("portrait").innerHTML = "";
+  try {
+    await runStage2(stage01Result);
+  } catch (e) {
+    showError("重试失败：" + e.message);
+    show("btn-retry-stage2");
+  }
+});
+
 let portraitBuffer = "";
 
 async function runAnalysis() {
-  const res = await fetch("/api/analyze", {
+  // Step 1: stage01 with auto-fallback (20 → 10)
+  try {
+    stage01Result = await runStage01(20);
+  } catch (e) {
+    $("progress-status").textContent = "正在以更精简模式重试...";
+    $("progress-bar").style.width = "0%";
+    stage01Result = await runStage01(10);
+  }
+  try {
+    sessionStorage.setItem("stage01Result", JSON.stringify(stage01Result));
+  } catch {}
+
+  // Step 2: stage2 (single attempt; failure shows retry button)
+  try {
+    await runStage2(stage01Result);
+  } catch (e) {
+    showError("画像生成失败：" + e.message + "，可点击重试");
+    show("btn-retry-stage2");
+  }
+}
+
+// Runs /api/stage01, returns the Stage01Result from the final `summaries` event.
+// Rejects if stream ends before `summaries` arrives, or if backend emits `error`.
+async function runStage01(count) {
+  const res = await fetch("/api/stage01", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ wereadKey, tier: chosenTier }),
+    body: JSON.stringify({ wereadKey, count }),
   });
-  if (!res.ok || !res.body) throw new Error("无法启动分析流");
+  if (!res.ok || !res.body) throw new Error("无法启动 stage01");
 
-  const reader = res.body.getReader();
+  let captured = null;
+  let backendError = null;
+  await readSSE(res.body, (evt) => {
+    if (evt.type === "summaries") { captured = evt.data; return; }
+    if (evt.type === "error") { backendError = evt.message; return; }
+    handleEvent(evt, "stage01");
+  });
+  if (backendError) throw new Error(backendError);
+  if (!captured) throw new Error("stage01 未返回 summaries（可能超时）");
+  return captured;
+}
+
+async function runStage2(result) {
+  const res = await fetch("/api/stage2", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ result }),
+  });
+  if (!res.ok || !res.body) throw new Error("无法启动 stage2");
+
+  let backendError = null;
+  let sawDone = false;
+  await readSSE(res.body, (evt) => {
+    if (evt.type === "error") { backendError = evt.message; return; }
+    if (evt.type === "done") sawDone = true;
+    handleEvent(evt, "stage2");
+  });
+  if (backendError) throw new Error(backendError);
+  if (!sawDone) throw new Error("stage2 未完成（可能超时）");
+}
+
+async function readSSE(body, onEvent) {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
-
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -1000,19 +1045,21 @@ async function runAnalysis() {
       if (!line.startsWith("data:")) continue;
       const data = line.slice(5).trim();
       if (!data) continue;
-      try { handleEvent(JSON.parse(data)); } catch {}
+      try { onEvent(JSON.parse(data)); } catch {}
     }
   }
 }
 
-function handleEvent(evt) {
+function handleEvent(evt, phase) {
   switch (evt.type) {
     case "status":
       $("progress-status").textContent = evt.message;
       $("progress-detail").textContent = "";
       break;
     case "progress": {
-      const pct = Math.round((evt.current / evt.total) * 100);
+      // stage01 maps progress to 0-60% of overall bar.
+      const ratio = evt.total ? evt.current / evt.total : 0;
+      const pct = Math.round(ratio * 60);
       $("progress-bar").style.width = pct + "%";
       $("progress-detail").textContent = `正在处理《${evt.bookTitle || ""}》(${evt.current}/${evt.total})`;
       break;
@@ -1020,6 +1067,7 @@ function handleEvent(evt) {
     case "meta":
       $("progress-status").textContent =
         `共 ${evt.totalBooks} 本带笔记的书，排除 ${evt.privateExcluded} 本私密阅读，本次分析 ${evt.selectedCount} 本（划线 ${evt.totalBookmarks} 条、想法 ${evt.totalThoughts} 条）`;
+      $("progress-bar").style.width = "60%";
       break;
     case "portrait_delta":
       if (portraitBuffer === "") {
@@ -1032,9 +1080,6 @@ function handleEvent(evt) {
       break;
     case "done":
       $("progress-bar").style.width = "100%";
-      break;
-    case "error":
-      showError(evt.message);
       break;
   }
 }
@@ -1050,11 +1095,12 @@ $("btn-copy").addEventListener("click", async () => {
 });
 
 $("btn-restart").addEventListener("click", () => {
-  wereadKey = null; chosenTier = null; totalBookCount = 0; portraitBuffer = "";
+  wereadKey = null; totalBookCount = 0; portraitBuffer = ""; stage01Result = null;
   $("portrait").innerHTML = "";
   $("manual-key").value = "";
   $("btn-paste").disabled = false;
   $("btn-paste").textContent = "我已复制 Key，自动粘贴";
+  hide("btn-retry-stage2");
   hide("step-portrait"); hide("step-progress"); show("step-intro");
   window.scrollTo({ top: 0, behavior: "smooth" });
 });

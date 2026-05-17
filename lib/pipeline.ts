@@ -10,10 +10,23 @@ import { compressBook } from "./compress.ts";
 import { complete, completeStream, type DeepSeekConfig } from "./deepseek.ts";
 import { STAGE1_SYSTEM, stage1User, STAGE2_SYSTEM, stage2User } from "./prompts.ts";
 
+export interface Stage01Result {
+  summaries: Array<{ title: string; author: string; summary: any }>;
+  meta: {
+    totalBooks: number;
+    privateExcluded: number;
+    totalBookmarks: number;
+    totalThoughts: number;
+    selectedCount: number;
+  };
+  readStats: any;
+}
+
 export type ProgressEvent =
   | { type: "status"; message: string }
   | { type: "progress"; current: number; total: number; bookTitle?: string }
   | { type: "meta"; totalBooks: number; privateExcluded: number; totalBookmarks: number; totalThoughts: number; selectedCount: number }
+  | { type: "summaries"; data: Stage01Result }
   | { type: "portrait_delta"; text: string }
   | { type: "done" }
   | { type: "error"; message: string };
@@ -32,10 +45,17 @@ function tierToN(tier: RunOptions["tier"]): number {
   return parseInt(tier, 10);
 }
 
-export async function run(opts: RunOptions): Promise<void> {
-  const { wereadKey, tier, deepseek, emit } = opts;
-  const targetN = tierToN(tier);
+// ---------- Stage 0+1: fetch, compress, per-book summary ----------
 
+export interface RunStage01Options {
+  wereadKey: string;
+  count: number;
+  deepseek: DeepSeekConfig;
+  emit: Emit;
+}
+
+export async function runStage01(opts: RunStage01Options): Promise<void> {
+  const { wereadKey, count, deepseek, emit } = opts;
   try {
     // ---- Stage 0a: shelf for privacy filter ----
     emit({ type: "status", message: "正在读取书架..." });
@@ -52,7 +72,7 @@ export async function run(opts: RunOptions): Promise<void> {
 
     candidates = candidates.filter(nb => (nb.noteCount + nb.reviewCount) > 0);
     candidates.sort((a, b) => (b.noteCount + b.reviewCount) - (a.noteCount + a.reviewCount));
-    const selected = candidates.slice(0, targetN);
+    const selected = candidates.slice(0, count);
 
     emit({
       type: "status",
@@ -65,26 +85,21 @@ export async function run(opts: RunOptions): Promise<void> {
     }
 
     // ---- Stage 0c + 0d + Stage 1: pipelined per-book (fetch → compress → summarize) ----
-    // Each book is processed end-to-end before waiting for others, reducing total latency.
     emit({ type: "status", message: `正在抓取并分析 ${selected.length} 本书...` });
     let doneCount = 0;
     let totalBookmarks = 0;
     let totalThoughts = 0;
 
-    // Kick off readStats in parallel with the per-book work.
     const readStatsPromise = getReadDetail(wereadKey).catch(() => null);
 
     const summaries = await pMap(selected, async (nb: NotebookBook) => {
-      // Stage 0c
       const [bookmarks, thoughts] = await Promise.all([
         getBookmarks(wereadKey, nb.bookId).catch(() => null),
         getMyReviews(wereadKey, nb.bookId).catch(() => [] as any[]),
       ]);
-      // Stage 0d
       const book = compressBook(nb.book.title, nb.book.author, bookmarks, thoughts);
       totalBookmarks += book.totalBookmarks;
       totalThoughts += book.totalThoughts;
-      // Stage 1
       try {
         const raw = await complete(
           deepseek,
@@ -124,7 +139,36 @@ export async function run(opts: RunOptions): Promise<void> {
 
     const readStats = await readStatsPromise;
 
-    // ---- Stage 2: portrait synthesis (Pro, streamed) ----
+    emit({
+      type: "summaries",
+      data: {
+        summaries: validSummaries,
+        meta: {
+          totalBooks: allNotebooks.length,
+          privateExcluded,
+          totalBookmarks,
+          totalThoughts,
+          selectedCount: validSummaries.length,
+        },
+        readStats,
+      },
+    });
+  } catch (e: any) {
+    emit({ type: "error", message: e?.message || String(e) });
+  }
+}
+
+// ---------- Stage 2: portrait synthesis ----------
+
+export interface RunStage2Options {
+  result: Stage01Result;
+  deepseek: DeepSeekConfig;
+  emit: Emit;
+}
+
+export async function runStage2(opts: RunStage2Options): Promise<void> {
+  const { result, deepseek, emit } = opts;
+  try {
     emit({ type: "status", message: "正在生成阅读人格画像..." });
     const stream = completeStream(
       deepseek,
@@ -134,12 +178,12 @@ export async function run(opts: RunOptions): Promise<void> {
         {
           role: "user",
           content: stage2User({
-            totalBooks: compressed.length,
-            privateExcluded,
-            totalBookmarks,
-            totalThoughts,
-            readStats,
-            bookSummaries: validSummaries,
+            totalBooks: result.meta.selectedCount,
+            privateExcluded: result.meta.privateExcluded,
+            totalBookmarks: result.meta.totalBookmarks,
+            totalThoughts: result.meta.totalThoughts,
+            readStats: result.readStats,
+            bookSummaries: result.summaries,
           }),
         },
       ],
@@ -154,6 +198,26 @@ export async function run(opts: RunOptions): Promise<void> {
   } catch (e: any) {
     emit({ type: "error", message: e?.message || String(e) });
   }
+}
+
+// ---------- Legacy single-shot pipeline (kept for local test.ts) ----------
+
+export async function run(opts: RunOptions): Promise<void> {
+  const { wereadKey, tier, deepseek, emit } = opts;
+  const targetN = tierToN(tier);
+
+  let captured: Stage01Result | null = null;
+  const captureEmit: Emit = (e) => {
+    if (e.type === "summaries") {
+      captured = e.data;
+      return;
+    }
+    emit(e);
+  };
+
+  await runStage01({ wereadKey, count: targetN, deepseek, emit: captureEmit });
+  if (!captured) return;
+  await runStage2({ result: captured, deepseek, emit });
 }
 
 function safeJSON(s: string): any | null {
