@@ -38,14 +38,10 @@ export async function onRequestPost(context: { request: Request; env: Env }): Pr
       const send = (e: ProgressEvent) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
       };
-      // Break CDN HTTP/2 buffering: 64KB padding exceeds default HTTP/2
-      // initial window (65535 bytes) and forces edge to flush bytes to client.
-      controller.enqueue(encoder.encode(":" + " ".repeat(65536) + "\n\n"));
       send({ type: "status", message: "正在生成阅读人格画像..." });
-      // Each heartbeat also sends 4KB padding to keep flushing through buffer.
       const heartbeat = setInterval(() => {
-        try { controller.enqueue(encoder.encode(`:${" ".repeat(4096)}\ndata: {"type":"ping"}\n\n`)); } catch {}
-      }, 3000);
+        try { controller.enqueue(encoder.encode(`data: {"type":"ping"}\n\n`)); } catch {}
+      }, 5000);
 
       try {
         await runStage2({
@@ -70,6 +66,10 @@ export async function onRequestPost(context: { request: Request; env: Env }): Pr
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no",
+      // Critical: EdgeOne applies Brotli to text/* by default, which buffers
+      // the entire SSE stream until enough data accumulates for a compressed
+      // block. Declaring identity disables that.
+      "Content-Encoding": "identity",
     },
   });
 }
