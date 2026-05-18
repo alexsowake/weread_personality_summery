@@ -47,13 +47,24 @@
       position: relative;
     }
     .hero-eyebrow {
-      font-family: 'DM Sans', sans-serif;
-      font-size: 11px;
+      font-family: 'DM Sans', 'PingFang SC', sans-serif;
+      font-size: 14px;
       font-weight: 600;
-      letter-spacing: 0.16em;
-      text-transform: uppercase;
+      letter-spacing: 0.06em;
       color: var(--red);
       margin-bottom: 20px;
+    }
+    .weread-inline-logo {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      vertical-align: -4px;
+      margin: 0 5px 0 6px;
+    }
+    .weread-name {
+      font-weight: 600;
+      color: var(--ink);
+      margin-right: 4px;
     }
     .hero-title {
       font-family: 'Playfair Display', 'Noto Serif SC', serif;
@@ -686,7 +697,7 @@
   <header class="hero">
     <div class="hero-eyebrow">微信读书 × 阅读人格分析</div>
     <h1 class="hero-title">你读过的书，<br><em>是一面没有滤镜的镜子</em></h1>
-    <p class="hero-sub">我在微信读书的 110 本书里做了笔记，却从来不知道它们加在一起，说了什么关于我的事。</p>
+    <p class="hero-sub">我在<img class="weread-inline-logo" src="./weread-logo.png" alt="微信读书" /><strong class="weread-name">微信读书</strong>的 110 本书里做了笔记，却从来不知道它们加在一起，说了什么关于我的事。</p>
     <a href="#get-started" class="hero-cta">生成我的阅读画像 ↓</a>
     <p class="hero-meta">本站不存储您的数据 · 安全私密</p>
   </header>
