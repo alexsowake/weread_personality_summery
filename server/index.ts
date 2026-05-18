@@ -75,6 +75,7 @@ app.post("/api/stage01", async (c) => {
     try {
       await send({ type: "status", message: "正在启动..." });
       await runStage01({ wereadKey, count, deepseek: cfg, emit: send });
+      await stream.sleep(200); // flush pending writeSSE before stream closes
     } finally {
       clearInterval(heartbeat);
     }
@@ -103,6 +104,7 @@ app.post("/api/stage2", async (c) => {
     try {
       await send({ type: "status", message: "正在生成阅读人格画像..." });
       await runStage2({ result, deepseek: cfg, emit: send });
+      await stream.sleep(200);
     } finally {
       clearInterval(heartbeat);
     }
