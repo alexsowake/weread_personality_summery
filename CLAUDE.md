@@ -5,19 +5,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev      # local dev server (EdgeOne Pages dev via wrangler-compatible CLI)
-npm run deploy   # deploy to EdgeOne Pages
+npm run dev              # local API dev (tsx watch server/index.ts, loads .env)
+npm start                # run API in production (tsx server/index.ts, used by PM2)
+npm run deploy:frontend  # deploy public/ to EdgeOne Pages
 ```
 
-No build step — EdgeOne Pages compiles TypeScript at deploy time. No test suite in the MVP.
+No build step — `tsx` runs TypeScript directly. No test suite in the MVP.
 
 ## Architecture
 
-Single-page H5 app backed by EdgeOne Pages Edge Functions (Cloudflare Workers-compatible runtime).
+Split deployment:
+- **Frontend** (`public/index.html`) → EdgeOne Pages CDN (static only)
+- **API** (`server/index.ts`, Hono on Node.js) → 阿里云华南3 轻量服务器, served at `https://api.aicw.me` behind Nginx + PM2
+
+Frontend was split off the API because EdgeOne CDN force-compresses all responses with Brotli, which buffers SSE and breaks the streaming UX. See `deploy/DEPLOY.md` for the server setup.
 
 **Request flow:**
-1. Browser → `POST /api/check` → validates WeRead API Key, returns `totalBookCount`
-2. Browser → `POST /api/analyze` → returns SSE stream of `ProgressEvent` JSON lines → browser renders portrait in real time
+1. Browser → `POST https://api.aicw.me/api/check` → validates WeRead API Key, returns `totalBookCount`
+2. Browser → `POST https://api.aicw.me/api/stage01` → SSE stream of `ProgressEvent` JSON lines (WeRead fetch + Flash summaries)
+3. Browser → `POST https://api.aicw.me/api/stage2` → SSE stream of portrait deltas (DeepSeek Pro)
+
+The two-step split (stage01 / stage2) exists because some intermediaries enforce idle-timeout-style limits; keeping each stage as its own request bounds individual response length while still streaming end-to-end.
 
 **Pipeline stages (all in `lib/pipeline.ts`):**
 - **Stage 0a** — `getShelf()` → build a `Set<bookId>` of private books (`secret === 1`)
