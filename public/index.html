@@ -857,6 +857,12 @@
 </div><!-- /page -->
 
 <script>
+// API host. Backend runs on a separate Node.js server (api.aicw.me) because
+// EdgeOne's CDN force-compresses SSE responses and buffers them indefinitely.
+const API_BASE = (location.hostname === "localhost" || location.hostname === "127.0.0.1")
+  ? ""
+  : "https://api.aicw.me";
+
 const $ = (id) => document.getElementById(id);
 const show = (id) => $(id).classList.remove("hidden");
 const hide = (id) => $(id).classList.add("hidden");
@@ -900,7 +906,7 @@ async function submitKey(key) {
   $("btn-paste").disabled = true;
   $("btn-paste").textContent = "正在校验 Key...";
   try {
-    const res = await fetch("/api/check", {
+    const res = await fetch(`${API_BASE}/api/check`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ wereadKey: key }),
@@ -992,7 +998,7 @@ async function runAnalysis() {
 // Runs /api/stage01, returns the Stage01Result from the final `summaries` event.
 // Rejects if stream ends before `summaries` arrives, or if backend emits `error`.
 async function runStage01(count) {
-  const res = await fetch("/api/stage01", {
+  const res = await fetch(`${API_BASE}/api/stage01`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ wereadKey, count }),
@@ -1012,7 +1018,7 @@ async function runStage01(count) {
 }
 
 async function runStage2(result) {
-  const res = await fetch("/api/stage2", {
+  const res = await fetch(`${API_BASE}/api/stage2`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ result }),

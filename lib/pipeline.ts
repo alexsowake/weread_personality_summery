@@ -135,9 +135,6 @@ export async function runStage01(opts: RunStage01Options): Promise<void> {
     };
     emit({ type: "meta", ...meta });
 
-    // Emit summaries immediately — do NOT await readStatsPromise here.
-    // readStats is optional in the Stage 2 prompt; waiting for it pushes the
-    // summaries event past EdgeOne's wall-clock limit.
     emit({
       type: "summaries",
       data: { summaries: validSummaries, meta, readStats: null },
