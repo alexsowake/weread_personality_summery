@@ -22,6 +22,8 @@ app.use("/api/*", cors({
     if (/\.edgeone\.(dev|cool|app)$/.test(origin)) return origin;
     if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return origin;
     if (origin === "https://aicw.me" || origin === "https://www.aicw.me") return origin;
+    if (origin === "https://read.aicw.me") return origin;
+    if (origin === "https://wereadwave.cn" || origin === "https://www.wereadwave.cn") return origin;
     return null;
   },
   allowMethods: ["POST", "OPTIONS"],
